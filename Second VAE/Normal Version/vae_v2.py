@@ -8,6 +8,7 @@ import os
 import numpy
 import torch
 import torchvision
+import matplotlib.pyplot as plt
 
 class Vae(torch.nn.Module):
 
@@ -31,19 +32,19 @@ class Vae(torch.nn.Module):
 
         self.enc_conv1 = torch.nn.Conv2d(self.n_frames, 32, (5, 5), stride=(3, 3), padding=(2, 2))
         self.enc_bn1 = torch.nn.BatchNorm2d(32)
-        self.enc_af1 = torch.nn.ELU()
+        self.enc_af1 = torch.nn.Hardtanh(inplace=True)
         
         self.enc_conv2 = torch.nn.Conv2d(32, 64, (5, 5), stride=(3, 3), padding=(2, 2))
         self.enc_bn2 = torch.nn.BatchNorm2d(64)
-        self.enc_af2 = torch.nn.ELU()
+        self.enc_af2 = torch.nn.Hardtanh(inplace=True)
 
         self.enc_conv3 = torch.nn.Conv2d(64, 128, (5, 5), stride=(3, 3), padding=(2, 2))
         self.enc_bn3 = torch.nn.BatchNorm2d(128)
-        self.enc_af3 = torch.nn.ELU()
+        self.enc_af3 = torch.nn.Hardtanh(inplace=True)
 
         self.enc_conv4 = torch.nn.Conv2d(128, 256, (5, 5), stride=(3, 3), padding=(2, 2))
         self.enc_bn4 = torch.nn.BatchNorm2d(256)
-        self.enc_af4 = torch.nn.ELU()
+        self.enc_af4 = torch.nn.Hardtanh(inplace=True)
 
         self.linear_mu = torch.nn.Linear(256 * self.hidden_x * self.hidden_y, self.n_latent)
         self.linear_var = torch.nn.Linear(256 * self.hidden_x * self.hidden_y, self.n_latent)
@@ -52,15 +53,15 @@ class Vae(torch.nn.Module):
 
         self.dec_conv4 = torch.nn.ConvTranspose2d(256, 128, (5, 5), stride=(3, 3), padding=(2, 2), output_padding=(1, 2))
         self.dec_bn4 = torch.nn.BatchNorm2d(128)
-        self.dec_af4 = torch.nn.ELU()
+        self.dec_af4 = torch.nn.Hardtanh(inplace=True)
 
         self.dec_conv3 = torch.nn.ConvTranspose2d(128, 64, (5, 5), stride=(3, 3), padding=(2, 2), output_padding=(1, 2))
         self.dec_bn3 = torch.nn.BatchNorm2d(64)
-        self.dec_af3 = torch.nn.ELU()
+        self.dec_af3 = torch.nn.Hardtanh(inplace=True)
 
         self.dec_conv2 = torch.nn.ConvTranspose2d(64, 32, (5, 5), stride=(3, 3), padding=(2, 2), output_padding=(0, 2))
         self.dec_bn2 = torch.nn.BatchNorm2d(32)
-        self.dec_af2 = torch.nn.ELU()
+        self.dec_af2 = torch.nn.Hardtanh(inplace=True)
 
         self.dec_conv1 = torch.nn.ConvTranspose2d(32, self.n_frames, (5, 5), stride=(3, 3), padding=(2, 2), output_padding=(2,0))
         self.dec_bn1 = torch.nn.BatchNorm2d(self.n_frames)
@@ -317,14 +318,16 @@ if __name__ == '__main__':
         kl_losses = []
         #ce_losses = []
         mse_losses = []
-
+        final = []
+        index = 0
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         with torch.no_grad():
             for data in cal_loader:
                 x, _ = data
+                final_input = x
                 x = x.to(device)
                 x_hat, mu, logvar = model(x)
-            
+                
                 kl_loss = torch.mul(
                     input=torch.sum(mu.pow(2) + logvar.exp() - logvar - 1, 1),
                     other=0.5)
@@ -332,11 +335,14 @@ if __name__ == '__main__':
                 #        x_hat * x.log2().nan_to_num(-100) + (1 - x_hat) * (1 - x).log2().nan_to_num(-100),
                 #        (1, 2, 3))
                 mse_loss = torch.sum((x - x_hat).pow(2), (1, 2, 3))
-
+                l = [index, final_input, x_hat, kl_loss.detach().cpu().numpy(), mse_loss.detach().cpu().numpy()]
+                final.append(l)
                 kl_losses.extend(list(kl_loss.detach().cpu().numpy()))
                 #ce_losses.extend(list(ce_loss.detach().cpu().numpy()))
-                mse_losses.extend(list(kl_loss.detach().cpu().numpy()))
-        
+                mse_losses.extend(list(mse_loss.detach().cpu().numpy()))
+                index += 1
+        kl_losses_2 = kl_losses[:]
+        mse_losses_2 = mse_losses[:]
         kl_losses.sort()
         mse_losses.sort()
         #ce_losses.sort()
@@ -345,5 +351,22 @@ if __name__ == '__main__':
         #ce_losses = [i.item() for i in ce_losses]
         with open(f'cal_{".".join(args.weights.split(".")[:-1])}.json', 'w') as cal_f:
             cal_f.write(json.dumps({'kl_loss': kl_losses, 'mse_loss': mse_losses}))
-
-
+        for i in range(len(final)):
+          input_matrix = final[i][1][0][0] 
+          output_matrix = final[i][2][0][0] 
+          matrix_shape = input_matrix.shape
+          input_img = input_matrix.cpu().numpy()
+          output_img = output_matrix.cpu().numpy()
+          numpy.savetxt('input.csv', input_img, delimiter=',')
+          numpy.savetxt('output.csv', output_img, delimiter=',')
+          plt.imsave(f'/content/Results/Input/{i}.png', input_img, cmap='gray')
+          plt.imsave(f'/content/Results/Reconstructed/{i}.png', output_img, cmap='gray')
+        final_kl_dict = {}
+        final_mse_dict = {}
+        for i in final:
+            final_kl_dict[f'{i[0]}'] = str(i[3])
+            final_mse_dict[f'{i[0]}'] = str(i[4])
+        with open("kl_loss.json", "w") as KL_Json:
+            json.dump(final_kl_dict, KL_Json)
+        with open("mse_loss.json","w") as MSE_Json:
+            json.dump(final_mse_dict, MSE_Json)
